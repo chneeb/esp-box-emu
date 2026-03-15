@@ -83,7 +83,7 @@ set(EMULATOR_COMPONENTS
 
 set(
   COMPONENTS
-  "main esptool_py esp_lcd esp_psram task format display display_drivers monitor timer ${EMULATOR_COMPONENTS} box-emu gui menu"
+  "main esptool_py esp_lcd esp_psram task format monitor timer ${EMULATOR_COMPONENTS} custom-bsp box-emu gui menu"
   CACHE STRING
   "List of components to include"
   )

@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 
-#include "display.hpp"
 #include "logger.hpp"
 
 #include "box-emu.hpp"
@@ -28,7 +27,7 @@ public:
   struct Config {
     RomInfo info; ///< rom info
     bool copy_romdata = true; ///< copy the romdata to the cart
-    std::shared_ptr<espp::Display<Pixel>> display; ///< display pointer for the menu
+    BoxEmu::DisplayDriver *display{nullptr}; ///< display pointer for the menu
     espp::Logger::Verbosity verbosity = espp::Logger::Verbosity::WARN; ///< verbosity level for the logger
   };
 
@@ -319,6 +318,6 @@ protected:
   RomInfo info_;
   std::string savedir_;
   std::unique_ptr<Menu> menu_;
-  std::shared_ptr<espp::Display<Pixel>> display_;
+  BoxEmu::DisplayDriver *display_{nullptr};
   espp::Logger logger_;
 };

@@ -48,9 +48,13 @@ extern "C" void app_main(void) {
     logger.warn("This may happen if the gamepad is not connected.");
   }
 
-  if (!emu.initialize_battery()) {
-    logger.warn("Failed to initialize battery!");
-    logger.warn("This may happen if the battery is not connected.");
+  const bool has_battery_and_haptics = (emu.version() != BoxEmu::Version::CARDKB);
+
+  if (has_battery_and_haptics) {
+    if (!emu.initialize_battery()) {
+      logger.warn("Failed to initialize battery!");
+      logger.warn("This may happen if the battery is not connected.");
+    }
   }
 
   if (!emu.initialize_video()) {
@@ -58,9 +62,11 @@ extern "C" void app_main(void) {
     return;
   }
 
-  if (!emu.initialize_haptics()) {
-    logger.warn("Failed to initialize haptics!");
-    logger.warn("This may happen if the gamepad is not connected.");
+  if (has_battery_and_haptics) {
+    if (!emu.initialize_haptics()) {
+      logger.warn("Failed to initialize haptics!");
+      logger.warn("This may happen if the gamepad is not connected.");
+    }
   }
 
   logger.info("initializing gui...");
@@ -88,8 +94,10 @@ extern "C" void app_main(void) {
     }
 
     // have broken out of the loop, let the user know we're processing...
-    emu.set_haptic_effect(gui.get_haptic_waveform());
-    emu.play_haptic_effect();
+    if (has_battery_and_haptics) {
+      emu.set_haptic_effect(gui.get_haptic_waveform());
+      emu.play_haptic_effect();
+    }
 
     gui.pause();
 

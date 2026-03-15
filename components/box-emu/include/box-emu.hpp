@@ -16,7 +16,7 @@
 
 #include <tinyusb_default_config.h>
 
-#include "esp-box.hpp"
+#include "custom-bsp.hpp"
 #include "event_manager.hpp"
 
 #include "aw9523.hpp"
@@ -25,6 +25,7 @@
 #include "drv2605.hpp"
 #include "events.hpp"
 #include "high_resolution_timer.hpp"
+#include "i2c.hpp"
 #include "keypad_input.hpp"
 #include "max1704x.hpp"
 #include "mcp23x17.hpp"
@@ -45,7 +46,7 @@ public:
 
   // Define the BSP class for easier access, and potential ability to change the
   // BSP if we want to support other targets.
-  using Bsp = espp::EspBox;
+  using Bsp = CustomBsp;
 
   // Wrap some of the EspBox defines / methods for easier access and to remove
   // dependency on EspBox from other components
@@ -77,8 +78,9 @@ public:
   /// The Version of the BoxEmu
   enum class Version {
     UNKNOWN, ///< unknown box
-    V0,      ///< first version of the box
-    V1,      ///< second version of the box
+    V0,      ///< first version of the box (MCP23x17 input)
+    V1,      ///< second version of the box (AW9523 input)
+    CARDKB,  ///< custom hardware with M5Stack CardKB input
   };
 
   /// @brief Access the singleton instance of the BoxEmu class
@@ -301,11 +303,87 @@ protected:
     static constexpr adc_channel_t BATTERY_ADC_CHANNEL = ADC_CHANNEL_3;
   };
 
-  // external I2c (peripherals)
-  static constexpr auto external_i2c_port = I2C_NUM_1;
-  static constexpr auto external_i2c_clock_speed = 400 * 1000;
-  static constexpr gpio_num_t external_i2c_sda = GPIO_NUM_41;
-  static constexpr gpio_num_t external_i2c_scl = GPIO_NUM_40;
+  // CardKB input class — reads M5Stack CardKB (I2C address 0x5F).
+  // Returns a synthesised 16-bit pin bitmask so it fits the InputBase interface.
+  class CardKbInput : public InputBase {
+  public:
+    static constexpr uint8_t CARDKB_ADDR = 0x5F;
+
+    static constexpr uint16_t UP_PIN     = (1 << 0);
+    static constexpr uint16_t DOWN_PIN   = (1 << 1);
+    static constexpr uint16_t LEFT_PIN   = (1 << 2);
+    static constexpr uint16_t RIGHT_PIN  = (1 << 3);
+    static constexpr uint16_t A_PIN      = (1 << 4);
+    static constexpr uint16_t B_PIN      = (1 << 5);
+    static constexpr uint16_t X_PIN      = (1 << 6);
+    static constexpr uint16_t Y_PIN      = (1 << 7);
+    static constexpr uint16_t START_PIN  = (1 << 8);
+    static constexpr uint16_t SELECT_PIN = (1 << 9);
+
+    explicit CardKbInput(espp::I2c &i2c) : i2c_(i2c) {}
+
+    uint16_t get_pins(std::error_code &ec) override {
+      uint8_t key = 0;
+      bool ok = i2c_.read(CARDKB_ADDR, &key, 1);
+      if (!ok) {
+        ec = std::make_error_code(std::errc::io_error);
+        return 0;
+      }
+      return key == 0 ? 0 : key_to_pins(key);
+    }
+
+    GamepadState pins_to_gamepad_state(uint16_t pins) override {
+      GamepadState state;
+      state.up     = (bool)(pins & UP_PIN);
+      state.down   = (bool)(pins & DOWN_PIN);
+      state.left   = (bool)(pins & LEFT_PIN);
+      state.right  = (bool)(pins & RIGHT_PIN);
+      state.a      = (bool)(pins & A_PIN);
+      state.b      = (bool)(pins & B_PIN);
+      state.x      = (bool)(pins & X_PIN);
+      state.y      = (bool)(pins & Y_PIN);
+      state.start  = (bool)(pins & START_PIN);
+      state.select = (bool)(pins & SELECT_PIN);
+      return state;
+    }
+
+    void handle_volume_pins(uint16_t /*pins*/) override {}
+
+  private:
+    espp::I2c &i2c_;
+
+    static uint16_t key_to_pins(uint8_t key) {
+      switch (key) {
+        // Arrow keys (CardKB HID codes)
+        case 0xB5: return UP_PIN;
+        case 0xB6: return DOWN_PIN;
+        case 0xB4: return LEFT_PIN;
+        case 0xB7: return RIGHT_PIN;
+        // WASD (alternate D-pad)
+        case 'w': case 'W': return UP_PIN;
+        case 's': case 'S': return DOWN_PIN;
+        case 'a': case 'A': return LEFT_PIN;
+        case 'd': case 'D': return RIGHT_PIN;
+        // Action buttons
+        case 'z': case 'Z': return A_PIN;
+        case 'x': case 'X': return B_PIN;
+        case 'q': case 'Q': return X_PIN;
+        case 'e': case 'E': return Y_PIN;
+        // Menu
+        case '\r': case '\n': return START_PIN;
+        case '\t':            return SELECT_PIN;
+        case ' ':             return A_PIN;   // Space = A
+        case 0x08:            return B_PIN;   // Backspace = B
+        default:              return 0;
+      }
+    }
+  };
+
+  // external I2c (peripherals) — SDA=8, SCL=9 for CardKB
+  static constexpr auto external_i2c_port = I2C_NUM_0;
+  static constexpr auto external_i2c_clock_speed = 100 * 1000;
+  static constexpr gpio_num_t external_i2c_sda = GPIO_NUM_8;
+  static constexpr gpio_num_t external_i2c_scl = GPIO_NUM_9;
 
   // uSD card
   static constexpr gpio_num_t sdcard_cs = GPIO_NUM_10;
@@ -387,6 +465,9 @@ struct fmt::formatter<BoxEmu::Version> : fmt::formatter<std::string> {
         break;
       case BoxEmu::Version::V1:
         name = "V1";
+        break;
+      case BoxEmu::Version::CARDKB:
+        name = "CARDKB";
         break;
     }
     return fmt::formatter<std::string>::format(name, ctx);

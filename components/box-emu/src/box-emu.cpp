@@ -9,19 +9,26 @@ BoxEmu::Version BoxEmu::version() const {
 }
 
 void BoxEmu::detect() {
+  // Probe for CardKB first (custom hardware)
+  bool cardkb_found = external_i2c_.probe_device(CardKbInput::CARDKB_ADDR);
+  if (cardkb_found) {
+    version_ = BoxEmu::Version::CARDKB;
+    logger_.info("Detected CardKB (version {})", version_);
+    return;
+  }
+
+  // Fall back to original ESP-Box-Emu hardware
   bool version0_found = external_i2c_.probe_device(version0::input_address);
   bool version1_found = external_i2c_.probe_device(version1::input_address);
   if (version1_found) {
-    // Version 1
     version_ = BoxEmu::Version::V1;
   } else if (version0_found) {
-    // Version 0
     version_ = BoxEmu::Version::V0;
   } else {
     logger_.warn("No box-emu hardware detected");
+    logger_.warn("\tProbed for CardKB at 0x{:02x}", CardKbInput::CARDKB_ADDR);
     logger_.warn("\tProbed for MCP23x17 (version0) at 0x{:02x}", version0::input_address);
     logger_.warn("\tProbed for AW9523 (version1) at 0x{:02x}", version1::input_address);
-    // No box detected
     version_ = BoxEmu::Version::UNKNOWN;
     return;
   }
@@ -29,7 +36,8 @@ void BoxEmu::detect() {
 }
 
 espp::I2c &BoxEmu::internal_i2c() {
-  return Bsp::get().internal_i2c();
+  // Custom hardware has a single I2C bus; expose it as "internal" too.
+  return external_i2c_;
 }
 
 espp::I2c &BoxEmu::external_i2c() {
@@ -55,42 +63,41 @@ bool BoxEmu::initialize_box() {
     logger_.error("Failed to initialize display!");
     return false;
   }
-  // initialize the touchpad
+  // initialize the touchpad (may be a no-op for custom hardware)
   if (!box.initialize_touch()) {
-    logger_.error("Failed to initialize touchpad!");
-    return false;
+    logger_.warn("Failed to initialize touchpad — continuing without touch");
   }
 
-  // initialize the mute button to broadcast the mute state
-  logger_.info("Initializing mute button");
-  mute_button_ = std::make_shared<espp::Button>(espp::Button::Config{
-      .name = "mute button",
-      .interrupt_config =
-          {
-              .gpio_num = Bsp::get_mute_pin(),
-              .callback =
-                  [](const espp::Interrupt::Event &event) {
-                    Bsp::get().mute(event.active);
-                    // simply publish that the mute button was presssed
-                    espp::EventManager::get().publish(mute_button_topic, {});
-                  },
-              .active_level = espp::Interrupt::ActiveLevel::LOW,
-              .interrupt_type = espp::Interrupt::Type::ANY_EDGE,
-              .pullup_enabled = true,
-              .pulldown_enabled = false,
-          },
-      .task_config =
-          {
-              .name = "mute button task",
-              .stack_size_bytes = 4 * 1024,
-              .priority = 5,
-          },
-      .log_level = espp::Logger::Verbosity::WARN,
-  });
-
-  // update the mute state (since it's a flip-flop and may have been set if we
-  // restarted without power loss)
-  Bsp::get().mute(mute_button_->is_pressed());
+  // Only initialize mute button if a mute pin is configured.
+  if (Bsp::get_mute_pin() != GPIO_NUM_NC) {
+    logger_.info("Initializing mute button");
+    mute_button_ = std::make_shared<espp::Button>(espp::Button::Config{
+        .name = "mute button",
+        .interrupt_config =
+            {
+                .gpio_num = Bsp::get_mute_pin(),
+                .callback =
+                    [](const espp::Interrupt::Event &event) {
+                      Bsp::get().mute(event.active);
+                      espp::EventManager::get().publish(mute_button_topic, {});
+                    },
+                .active_level = espp::Interrupt::ActiveLevel::LOW,
+                .interrupt_type = espp::Interrupt::Type::ANY_EDGE,
+                .pullup_enabled = true,
+                .pulldown_enabled = false,
+            },
+        .task_config =
+            {
+                .name = "mute button task",
+                .stack_size_bytes = 4 * 1024,
+                .priority = 5,
+            },
+        .log_level = espp::Logger::Verbosity::WARN,
+    });
+    Bsp::get().mute(mute_button_->is_pressed());
+  } else {
+    logger_.info("No mute button configured (GPIO_NUM_NC)");
+  }
   return true;
 }
 
@@ -267,6 +274,16 @@ bool BoxEmu::initialize_gamepad() {
                                                })
                                              );
     input_.reset(raw_input);
+  } else if (version_ == BoxEmu::Version::CARDKB) {
+    // Reinitialize I2C to recover from any bus-stuck state caused by probing
+    // absent peripherals (DRV2605, MAX1704x) before the CardKB reads start.
+    std::error_code ec;
+    external_i2c_.deinit(ec);
+    external_i2c_.init(ec);
+    if (ec) {
+      logger_.warn("I2C reinit failed: {}", ec.message());
+    }
+    input_.reset(new CardKbInput(external_i2c_));
   } else {
     return false;
   }
@@ -304,9 +321,15 @@ bool BoxEmu::update_gamepad_state() {
   std::error_code ec;
   auto pins = input_->get_pins(ec);
   if (ec) {
-    logger_.error("Error reading input pins: {}", ec.message());
-    can_read_gamepad_ = false;
+    logger_.warn("Error reading input pins: {} — recovering I2C bus", ec.message());
+    std::error_code rec;
+    external_i2c_.deinit(rec);
+    external_i2c_.init(rec);
+    if (rec) {
+      logger_.error("I2C recovery failed: {}", rec.message());
+    }
     return false;
+    // can_read_gamepad_ stays true so the next timer tick retries
   }
 
   auto new_gamepad_state = input_->pins_to_gamepad_state(pins);
@@ -653,8 +676,9 @@ bool BoxEmu::initialize_usb() {
   esp_vfs_fat_mount_config_t fat_mount_config = {
     .format_if_mount_failed = false,
     .max_files = 5,
-    .allocation_unit_size = 2 * 1024, // sector size is 512 bytes, this should be between sector size and (128 * sector size). Larger means higher read/write performance and higher overhead for small files.
-    .disk_status_check_enable = false, // true if you see issues or are unmounted properly; slows down I/O
+    .allocation_unit_size = 2 * 1024,
+    .disk_status_check_enable = false,
+    .use_one_fat = false,
   };
 
   tinyusb_msc_fatfs_config_t config_msc = {

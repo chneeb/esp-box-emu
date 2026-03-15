@@ -2,8 +2,6 @@
 
 #include <memory>
 
-#include "display.hpp"
-
 #include "doom_cart.hpp"
 #include "gbc_cart.hpp"
 #include "genesis_cart.hpp"
@@ -11,7 +9,7 @@
 #include "nes_cart.hpp"
 #include "sms_cart.hpp"
 
-std::unique_ptr<Cart> make_cart(const RomInfo& info, std::shared_ptr<espp::Display<lv_color16_t>> display) {
+std::unique_ptr<Cart> make_cart(const RomInfo& info, BoxEmu::DisplayDriver *display) {
   switch (info.platform) {
   case Emulator::GAMEBOY:
   case Emulator::GAMEBOY_COLOR:
