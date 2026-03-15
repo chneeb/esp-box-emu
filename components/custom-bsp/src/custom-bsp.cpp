@@ -73,9 +73,10 @@ bool CustomBsp::initialize_lcd() {
   esp_lcd_panel_io_i80_config_t io_cfg = {};
   io_cfg.cs_gpio_num            = LCD_CS;
   io_cfg.pclk_hz                = 10 * 1000 * 1000; // 10 MHz — conservative for breadboard wiring
-  io_cfg.trans_queue_depth      = 10;
+  io_cfg.trans_queue_depth      = 1; // depth=1: each draw_bitmap blocks until DMA completes, preventing buffer overwrite
   io_cfg.lcd_cmd_bits           = 8;
   io_cfg.lcd_param_bits         = 8;
+  io_cfg.flags.swap_color_bytes = 1; // lv_color_to_u16/make_color produce LE; swap to BE for ILI9341
   io_cfg.dc_levels.dc_idle_level  = 0;
   io_cfg.dc_levels.dc_cmd_level   = 0;
   io_cfg.dc_levels.dc_dummy_level = 0;
@@ -89,8 +90,8 @@ bool CustomBsp::initialize_lcd() {
   // ILI9341 panel device
   esp_lcd_panel_dev_config_t panel_cfg = {};
   panel_cfg.reset_gpio_num   = LCD_RST;
-  panel_cfg.rgb_ele_order    = LCD_RGB_ELEMENT_ORDER_RGB;
-  panel_cfg.data_endian      = LCD_RGB_DATA_ENDIAN_LITTLE; // lv_color_to_u16 produces LE; driver swaps to BE for ILI9341
+  panel_cfg.rgb_ele_order    = LCD_RGB_ELEMENT_ORDER_BGR;
+  panel_cfg.data_endian      = LCD_RGB_DATA_ENDIAN_BIG; // after swap_color_bytes, data arrives big-endian
   panel_cfg.bits_per_pixel   = 16;
 
   if (esp_lcd_new_panel_ili9341(io_, &panel_cfg, &panel_) != ESP_OK) {
@@ -171,11 +172,11 @@ bool CustomBsp::initialize_display(size_t pixel_buffer_size) {
     return false;
   }
 
-  // LVGL 9.x: draw buffers must be wrapped in lv_draw_buf_t
+  // LVGL 9.x: draw buffers must be wrapped in lv_draw_buf_t.
+  // Use plain RGB565 (little-endian); the i80 swap_color_bytes=1 flag swaps to
+  // big-endian before transmission, which is what ILI9341 expects.
   static lv_draw_buf_t draw_buf1, draw_buf2;
   uint32_t buf_bytes = pixel_buffer_size * sizeof(Pixel);
-  // RGB565_SWAP = big-endian byte order (high byte first), matching what
-  // ILI9341 expects and what Arduino_GFX uses natively.
   lv_draw_buf_init(&draw_buf1, lcd_width(), lcd_height(), LV_COLOR_FORMAT_RGB565,
                    LV_STRIDE_AUTO, lvgl_buf1, buf_bytes);
   lv_draw_buf_init(&draw_buf2, lcd_width(), lcd_height(), LV_COLOR_FORMAT_RGB565,

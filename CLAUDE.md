@@ -138,17 +138,24 @@ The emulator video task runs on **core 1** at priority 20. It double-buffers int
 LVGL runs on **core 0** at priority 5. The GUI is paused (`gui.pause()`) before
 emulator startup to avoid concurrent LCD access.
 
+`lvgl_flush_cb` calls `lv_display_flush_ready()` synchronously after `esp_lcd_panel_draw_bitmap`
+(safe with double-buffered draw buffers — LVGL switches to the other buffer immediately).
+Do NOT add a separate task calling `lv_task_handler()`; the Gui's `HighResolutionTimer` is
+the sole driver of LVGL rendering. A second caller causes concurrent LCD writes and a black screen.
+
 Frame scaling modes: `ORIGINAL`, `FIT`, `FILL` — toggled via the pause menu.
 Row batch size: 30 rows per `write_lcd_frame()` call (`num_rows_in_framebuffer`).
 
 ## Display tuning
 
 - Pixel clock: `pclk_hz` in `custom-bsp.cpp` — currently 10 MHz (conservative for breadboard). Try 20 MHz only once breadboard wiring is clean/short.
-- ILI9341 is initialized in landscape via `esp_lcd_panel_swap_xy(true)` + `mirror(true, false)`. Adjust mirror flags if image is flipped.
+- ILI9341 is initialized in landscape via `esp_lcd_panel_swap_xy(true)` + `mirror(false, false)`.
 - RD pin (GPIO 2) is driven HIGH statically — display is write-only.
 - LVGL draw buffers and emulator VRAM are all allocated in SPIRAM.
 - LVGL 9.x draw buffers must be `lv_draw_buf_t` structs (not raw pointers). Initialized via `lv_draw_buf_init()`.
-- Color format: `LV_COLOR_FORMAT_RGB565`, endian: `LCD_RGB_DATA_ENDIAN_BIG`.
+- Color format: `LV_COLOR_FORMAT_RGB565` (little-endian native). Hardware byte-swap to big-endian for ILI9341 is done via `io_cfg.flags.swap_color_bytes = 1` in the i80 panel IO config. This applies uniformly to both LVGL flushes and emulator `write_lcd_frame()` calls. `panel_cfg.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR`.
+- `make_color()` uses `lv_color_to_u16()` (little-endian). The i80 `swap_color_bytes` flag corrects byte order for all pixel data paths — do not add per-path byte swapping.
+- **Known issue — screen tearing**: ILI9341 has no TE (Tearing Effect) pin wired. The display scans out GRAM at ~60 Hz while the CPU writes new frames, causing a moving horizontal tear line visible in both menu and gameplay. Fix: wire the ILI9341 TE pin to a free ESP32-S3 GPIO and enable tear sync via command `0x35`.
 
 ## Memory
 
