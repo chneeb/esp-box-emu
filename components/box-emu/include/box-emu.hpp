@@ -3,6 +3,7 @@
 #include <sdkconfig.h>
 
 #include <esp_err.h>
+#include <esp_rom_sys.h>
 #include <esp_partition.h>
 #include <esp_vfs_fat.h>
 #include <sdmmc_cmd.h>
@@ -80,7 +81,8 @@ public:
     UNKNOWN, ///< unknown box
     V0,      ///< first version of the box (MCP23x17 input)
     V1,      ///< second version of the box (AW9523 input)
-    CARDKB,  ///< custom hardware with M5Stack CardKB input
+    CARDKB,   ///< custom hardware with M5Stack CardKB input
+    NUNCHUCK, ///< NES Mini Classic clone gamepad (I2C addr 0x52)
   };
 
   /// @brief Access the singleton instance of the BoxEmu class
@@ -379,6 +381,85 @@ protected:
     }
   };
 
+  // NES Mini Classic clone gamepad (I2C address 0x52, 8-byte report).
+  // Buttons are active low in bytes 6 and 7 of the report.
+  class NunchuckInput : public InputBase {
+  public:
+    static constexpr uint8_t NUNCHUCK_ADDR = 0x52;
+
+    static constexpr uint16_t UP_PIN     = (1 << 0);
+    static constexpr uint16_t DOWN_PIN   = (1 << 1);
+    static constexpr uint16_t LEFT_PIN   = (1 << 2);
+    static constexpr uint16_t RIGHT_PIN  = (1 << 3);
+    static constexpr uint16_t A_PIN      = (1 << 4);
+    static constexpr uint16_t B_PIN      = (1 << 5);
+    static constexpr uint16_t X_PIN      = (1 << 6);
+    static constexpr uint16_t Y_PIN      = (1 << 7);
+    static constexpr uint16_t START_PIN  = (1 << 8);
+    static constexpr uint16_t SELECT_PIN = (1 << 9);
+
+    explicit NunchuckInput(espp::I2c &i2c) : i2c_(i2c) { init(); }
+
+    uint16_t get_pins(std::error_code &ec) override {
+      // Poll sequence: write 0x00, wait 200 µs, read 8 bytes
+      uint8_t poll = 0x00;
+      if (!i2c_.write(NUNCHUCK_ADDR, &poll, 1)) {
+        ec = std::make_error_code(std::errc::io_error);
+        return 0;
+      }
+      esp_rom_delay_us(200);
+      uint8_t buf[8] = {};
+      if (!i2c_.read(NUNCHUCK_ADDR, buf, 8)) {
+        ec = std::make_error_code(std::errc::io_error);
+        return 0;
+      }
+      // Buttons active low — invert before mapping to pin bitmask
+      uint16_t pins = 0;
+      if (!(buf[7] & 0x01)) pins |= UP_PIN;
+      if (!(buf[6] & 0x40)) pins |= DOWN_PIN;
+      if (!(buf[7] & 0x02)) pins |= LEFT_PIN;
+      if (!(buf[6] & 0x80)) pins |= RIGHT_PIN;
+      if (!(buf[7] & 0x10)) pins |= A_PIN;
+      if (!(buf[7] & 0x40)) pins |= B_PIN;
+      if (!(buf[6] & 0x04)) pins |= START_PIN;
+      if (!(buf[6] & 0x10)) pins |= SELECT_PIN;
+      return pins;
+    }
+
+    GamepadState pins_to_gamepad_state(uint16_t pins) override {
+      GamepadState state;
+      state.up     = (bool)(pins & UP_PIN);
+      state.down   = (bool)(pins & DOWN_PIN);
+      state.left   = (bool)(pins & LEFT_PIN);
+      state.right  = (bool)(pins & RIGHT_PIN);
+      state.a      = (bool)(pins & A_PIN);
+      state.b      = (bool)(pins & B_PIN);
+      state.x      = false;
+      state.y      = false;
+      state.start  = (bool)(pins & START_PIN);
+      state.select = (bool)(pins & SELECT_PIN);
+      return state;
+    }
+
+    void handle_volume_pins(uint16_t /*pins*/) override {}
+
+  private:
+    espp::I2c &i2c_;
+
+    void init() {
+      // Init sequence for NES Mini Classic clone (order matters)
+      static const uint8_t seq1[] = {0xF0, 0x55};
+      static const uint8_t seq2[] = {0xFB, 0x00};
+      static const uint8_t seq3[] = {0xFE, 0x03}; // required for clone
+      i2c_.write(NUNCHUCK_ADDR, seq1, sizeof(seq1));
+      esp_rom_delay_us(1000);
+      i2c_.write(NUNCHUCK_ADDR, seq2, sizeof(seq2));
+      esp_rom_delay_us(1000);
+      i2c_.write(NUNCHUCK_ADDR, seq3, sizeof(seq3));
+      esp_rom_delay_us(1000);
+    }
+  };
+
   // external I2c (peripherals) — SDA=8, SCL=9 for CardKB
   static constexpr auto external_i2c_port = I2C_NUM_0;
   static constexpr auto external_i2c_clock_speed = 100 * 1000;
@@ -468,6 +549,9 @@ struct fmt::formatter<BoxEmu::Version> : fmt::formatter<std::string> {
         break;
       case BoxEmu::Version::CARDKB:
         name = "CARDKB";
+        break;
+      case BoxEmu::Version::NUNCHUCK:
+        name = "NUNCHUCK";
         break;
     }
     return fmt::formatter<std::string>::format(name, ctx);

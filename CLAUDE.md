@@ -31,6 +31,7 @@ ESP32-S3 Dev Module · OPI PSRAM · 16 MB flash
 |---|---|---|
 | ILI9341 display | 8-bit parallel (i80) | DC=7, CS=6, WR=1, RD=2, RST=5, D0–D7=21,46,18,17,19,20,3,14 |
 | CardKB keyboard | I2C (I2C_NUM_0) | SDA=8, SCL=9, addr=0x5F |
+| NES Mini Classic clone | I2C (I2C_NUM_0) | SDA=8, SCL=9, addr=0x52 |
 | SD card | SPI (SPI3_HOST) | SCK=12, MISO=13, MOSI=11, CS=10 |
 
 BSP: `components/custom-bsp/` — `CustomBsp` class.
@@ -130,6 +131,32 @@ on `external_i2c_` before creating `CardKbInput` to recover the bus.
 Battery (`initialize_battery`) and haptics (`initialize_haptics`) are skipped entirely for
 CARDKB hardware — guarded by `has_battery_and_haptics = (version != CARDKB)` in `main.cpp`.
 This avoids all DRV2605/MAX1704x I2C traffic, which was causing bus contention and CardKB timeouts.
+
+## Input — NES Mini Classic clone (Nunchuck)
+
+`NunchuckInput` class in `box-emu.hpp`. Auto-detected at I2C addr 0x52 on the same bus as CardKB (SDA=8, SCL=9).
+
+Init sequence sent once in constructor (order matters):
+```
+{0xF0, 0x55}
+{0xFB, 0x00}
+{0xFE, 0x03}  ← required for clone variant
+```
+
+Read sequence per poll: write `0x00`, wait 200 µs, read 8 bytes. Buttons are active low in bytes 6 and 7:
+
+| Button | Byte | Mask |
+|---|---|---|
+| Up | 7 | 0x01 |
+| Down | 6 | 0x40 |
+| Left | 7 | 0x02 |
+| Right | 6 | 0x80 |
+| A | 7 | 0x10 |
+| B | 7 | 0x40 |
+| Start | 6 | 0x04 |
+| Select | 6 | 0x10 |
+
+Detection order in `detect()`: CardKB (0x5F) → Nunchuck (0x52) → V1 (AW9523) → V0 (MCP23x17). Only one input device is active at a time — whichever is detected first wins. Plug in the desired controller before boot.
 
 ## Video pipeline
 

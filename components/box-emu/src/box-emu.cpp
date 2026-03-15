@@ -17,6 +17,14 @@ void BoxEmu::detect() {
     return;
   }
 
+  // Probe for NES Mini Classic clone nunchuck (0x52)
+  bool nunchuck_found = external_i2c_.probe_device(NunchuckInput::NUNCHUCK_ADDR);
+  if (nunchuck_found) {
+    version_ = BoxEmu::Version::NUNCHUCK;
+    logger_.info("Detected NES Mini Classic nunchuck (version {})", version_);
+    return;
+  }
+
   // Fall back to original ESP-Box-Emu hardware
   bool version0_found = external_i2c_.probe_device(version0::input_address);
   bool version1_found = external_i2c_.probe_device(version1::input_address);
@@ -284,6 +292,14 @@ bool BoxEmu::initialize_gamepad() {
       logger_.warn("I2C reinit failed: {}", ec.message());
     }
     input_.reset(new CardKbInput(external_i2c_));
+  } else if (version_ == BoxEmu::Version::NUNCHUCK) {
+    std::error_code ec;
+    external_i2c_.deinit(ec);
+    external_i2c_.init(ec);
+    if (ec) {
+      logger_.warn("I2C reinit failed: {}", ec.message());
+    }
+    input_.reset(new NunchuckInput(external_i2c_));
   } else {
     return false;
   }
