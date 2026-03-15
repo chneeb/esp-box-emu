@@ -148,14 +148,14 @@ Row batch size: 30 rows per `write_lcd_frame()` call (`num_rows_in_framebuffer`)
 
 ## Display tuning
 
-- Pixel clock: `pclk_hz` in `custom-bsp.cpp` — currently 10 MHz (conservative for breadboard). Try 20 MHz only once breadboard wiring is clean/short.
+- Pixel clock: `pclk_hz` in `custom-bsp.cpp` — currently 20 MHz. Try 40 MHz if wiring is clean/short (ILI9341 supports up to 33 MHz writes; ESP32-S3 i80 may allow higher).
 - ILI9341 is initialized in landscape via `esp_lcd_panel_swap_xy(true)` + `mirror(false, false)`.
 - RD pin (GPIO 2) is driven HIGH statically — display is write-only.
 - LVGL draw buffers and emulator VRAM are all allocated in SPIRAM.
-- LVGL 9.x draw buffers must be `lv_draw_buf_t` structs (not raw pointers). Initialized via `lv_draw_buf_init()`.
+- LVGL 9.x draw buffers must be `lv_draw_buf_t` structs (not raw pointers). Initialized via `lv_draw_buf_init()`. **Critical**: pass the actual buffer height (`pixel_buffer_size / lcd_width()` = 30), NOT `lcd_height()`. LVGL 9.5 validates `stride * h <= data_size` and returns `LV_RESULT_INVALID` (silently disabling rendering → black screen) if the declared height implies more bytes than were allocated.
 - Color format: `LV_COLOR_FORMAT_RGB565` (little-endian native). Hardware byte-swap to big-endian for ILI9341 is done via `io_cfg.flags.swap_color_bytes = 1` in the i80 panel IO config. This applies uniformly to both LVGL flushes and emulator `write_lcd_frame()` calls. `panel_cfg.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR`.
 - `make_color()` uses `lv_color_to_u16()` (little-endian). The i80 `swap_color_bytes` flag corrects byte order for all pixel data paths — do not add per-path byte swapping.
-- **Known issue — screen tearing**: ILI9341 has no TE (Tearing Effect) pin wired. The display scans out GRAM at ~60 Hz while the CPU writes new frames, causing a moving horizontal tear line visible in both menu and gameplay. Fix: wire the ILI9341 TE pin to a free ESP32-S3 GPIO and enable tear sync via command `0x35`.
+- **Known issue — screen tearing**: ILI9341 has no TE (Tearing Effect) pin wired. The display scans out GRAM at ~60 Hz while the CPU writes new frames. With `swap_xy=true` the physical scan direction maps to the logical X axis, so the tear appears as **vertical** bars rather than horizontal — most visible in the black left/right borders where the artifact is not masked by moving game content. Increasing `pclk_hz` reduces severity (faster writes = smaller overlap with scan cycle). The ILI9341 TE pin is not exposed on the Arduino shield connector, so hardware sync is not an option with this shield.
 
 ## Memory
 

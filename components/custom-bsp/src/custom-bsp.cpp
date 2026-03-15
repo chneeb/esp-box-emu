@@ -72,7 +72,7 @@ bool CustomBsp::initialize_lcd() {
   // Panel IO (controls CS, clock speed, command/data framing)
   esp_lcd_panel_io_i80_config_t io_cfg = {};
   io_cfg.cs_gpio_num            = LCD_CS;
-  io_cfg.pclk_hz                = 10 * 1000 * 1000; // 10 MHz — conservative for breadboard wiring
+  io_cfg.pclk_hz                = 20 * 1000 * 1000; // 20 MHz
   io_cfg.trans_queue_depth      = 1; // depth=1: each draw_bitmap blocks until DMA completes, preventing buffer overwrite
   io_cfg.lcd_cmd_bits           = 8;
   io_cfg.lcd_param_bits         = 8;
@@ -177,9 +177,10 @@ bool CustomBsp::initialize_display(size_t pixel_buffer_size) {
   // big-endian before transmission, which is what ILI9341 expects.
   static lv_draw_buf_t draw_buf1, draw_buf2;
   uint32_t buf_bytes = pixel_buffer_size * sizeof(Pixel);
-  lv_draw_buf_init(&draw_buf1, lcd_width(), lcd_height(), LV_COLOR_FORMAT_RGB565,
+  uint32_t buf_height = pixel_buffer_size / lcd_width(); // actual rows in buffer (not full display height)
+  lv_draw_buf_init(&draw_buf1, lcd_width(), buf_height, LV_COLOR_FORMAT_RGB565,
                    LV_STRIDE_AUTO, lvgl_buf1, buf_bytes);
-  lv_draw_buf_init(&draw_buf2, lcd_width(), lcd_height(), LV_COLOR_FORMAT_RGB565,
+  lv_draw_buf_init(&draw_buf2, lcd_width(), buf_height, LV_COLOR_FORMAT_RGB565,
                    LV_STRIDE_AUTO, lvgl_buf2, buf_bytes);
 
   lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
