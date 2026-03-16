@@ -67,6 +67,23 @@ TT21100/GT911 touch, MCP23x17 (V0) or AW9523 (V1) GPIO expander for input.
 
 Enable/disable emulators in the root `CMakeLists.txt` by commenting/uncommenting the `set(*_COMPONENTS ...)` lines.
 
+## Emulator notes
+
+### Genesis (Gwenesis) — `components/genesis/src/genesis.cpp`
+
+- `lfo_pm_table` is declared `extern int32_t*` in `genesis.cpp` but `ym2612.c` is compiled with
+  `#define GW_TARGET 1`, which makes it a `uint8_t*` of size `128*8*16 = 16384` bytes. Allocate
+  exactly `128*8*16` bytes (not `128*8*32 * sizeof(int32_t)` = 128 KB). Allocating 128 KB can
+  silently fail on SPIRAM-constrained boots and causes a `StoreProhibited` crash in `YM2612Init`.
+- Both `M68K_RAM` and `lfo_pm_table` have NULL-checked allocations with `ESP_LOGE` fallback; both
+  are nulled after `free()` in `deinit_genesis()`.
+
+### MSX (fMSX) — `components/msx/src/msx.cpp`
+
+- `-skip N` sets `UPeriod = 100 - N`; `RefreshScreen()` / `PutImage()` fires only when
+  `UCount >= 100`. With `-skip 50`, `frame_complete` is set every 2 VBlanks → `run_msx_rom()`
+  paces 2 frames as 1 → 2× game speed. Use `-skip 0` (UPeriod = 100, one signal per VBlank).
+
 ## SD card layout
 
 ```
@@ -183,6 +200,26 @@ Row batch size: 30 rows per `write_lcd_frame()` call (`num_rows_in_framebuffer`)
 - Color format: `LV_COLOR_FORMAT_RGB565` (little-endian native). Hardware byte-swap to big-endian for ILI9341 is done via `io_cfg.flags.swap_color_bytes = 1` in the i80 panel IO config. This applies uniformly to both LVGL flushes and emulator `write_lcd_frame()` calls. `panel_cfg.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR`.
 - `make_color()` uses `lv_color_to_u16()` (little-endian). The i80 `swap_color_bytes` flag corrects byte order for all pixel data paths — do not add per-path byte swapping.
 - **Known issue — screen tearing**: ILI9341 has no TE (Tearing Effect) pin wired. The display scans out GRAM at ~60 Hz while the CPU writes new frames. With `swap_xy=true` the physical scan direction maps to the logical X axis, so the tear appears as **vertical** bars rather than horizontal — most visible in the black left/right borders where the artifact is not masked by moving game content. Increasing `pclk_hz` reduces severity (faster writes = smaller overlap with scan cycle). The ILI9341 TE pin is not exposed on the Arduino shield connector, so hardware sync is not an option with this shield.
+
+## ESP-IDF patches
+
+The following local patches are applied to the ESP-IDF installation at `/home/chneeb/Source/esp-idf/`:
+
+### `components/esp_lcd/i80/esp_lcd_panel_io_i80.c` — GDMA `check_owner = false`
+
+**File**: `lcd_i80_init_dma_link()`, the `gdma_link_list_config_t` initializer (~line 634).
+
+**Change**: `check_owner = true` → `check_owner = false`
+
+**Why**: The i80 driver calls `gdma_link_mount_buffers(bus->dma_link, 0, ...)` from the `trans_done` ISR.
+At that point the DMA is fully idle; no descriptor is in use. However, `auto_write_back` (hardware ownership
+reset after each transfer) fires simultaneously with the `trans_done` interrupt. Due to a race between the
+ISR and the writeback propagating through cache/memory, `gdma_link_mount_buffers` reads stale
+`GDMA_LLI_OWNER_DMA` bits on all nodes and returns `ESP_ERR_INVALID_ARG` (logged as
+`E gdma-link: lli full start=0 need=N avail=0`). The ISR does not check the return value, so
+`lcd_start_transaction` then DMA's the stale descriptor from the previous transfer — corrupting the output.
+With `check_owner=false` the count is always the full pool, eliminating the race. Safe here because the
+i80 trans-done ISR is the only mount site and DMA is always stopped before it runs.
 
 ## Memory
 
