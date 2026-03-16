@@ -203,7 +203,12 @@ Row batch size: 30 rows per `write_lcd_frame()` call (`num_rows_in_framebuffer`)
 
 ## ESP-IDF patches
 
-The following local patches are applied to the ESP-IDF installation at `/home/chneeb/Source/esp-idf/`:
+Patches are tracked in `patches/` and applied by running `patches.sh` against `$IDF_PATH`:
+
+```bash
+source $IDF_PATH/export.sh   # sets IDF_PATH
+./patches.sh
+```
 
 ### `components/esp_lcd/i80/esp_lcd_panel_io_i80.c` — GDMA `check_owner = false`
 
@@ -220,6 +225,12 @@ ISR and the writeback propagating through cache/memory, `gdma_link_mount_buffers
 `lcd_start_transaction` then DMA's the stale descriptor from the previous transfer — corrupting the output.
 With `check_owner=false` the count is always the full pool, eliminating the race. Safe here because the
 i80 trans-done ISR is the only mount site and DMA is always stopped before it runs.
+
+**Symptom if missing**: Constant flicker from the first displayed frame. Every even LVGL frame DMA's the
+stale descriptor (pointing to the previous buffer) instead of the newly rendered buffer, so the display
+alternates between the current and the previous frame at ~30 Hz. Visible as a persistent shimmer on any
+animated content (roller, theme transitions). Confirmed by `E gdma-link: lli full` messages in the serial
+monitor output.
 
 ## Memory
 
