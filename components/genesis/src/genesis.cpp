@@ -2,6 +2,8 @@
 
 #pragma GCC optimize("Ofast")
 
+#include <esp_log.h>
+
 #include "genesis_shared_memory.hpp"
 
 extern "C" {
@@ -150,7 +152,10 @@ static void init(uint8_t *romdata, size_t rom_data_size) {
 
   // PSRAM (too big for shared mem):
   M68K_RAM = (uint8_t*)heap_caps_malloc(MAX_RAM_SIZE, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM); // 0x10000 (64kB) for M68K RAM
-  lfo_pm_table = (int32_t*)heap_caps_malloc(128*8*32 * sizeof(int32_t), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+  if (!M68K_RAM) { ESP_LOGE("genesis", "Failed to allocate M68K_RAM (%u bytes)", MAX_RAM_SIZE); return; }
+  // GW_TARGET=1 in ym2612.c uses uint8_t lfo_pm_table[128*8*16] = 16384 bytes
+  lfo_pm_table = (int32_t*)heap_caps_malloc(128*8*16, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+  if (!lfo_pm_table) { ESP_LOGE("genesis", "Failed to allocate lfo_pm_table (16384 bytes)"); return; }
 
   load_cartridge(romdata, rom_data_size);
   power_on();
@@ -390,6 +395,6 @@ std::span<uint8_t> get_genesis_video_buffer() {
 void deinit_genesis() {
   BoxEmu::get().audio_sample_rate(48000);
   shared_mem_clear();
-  free(M68K_RAM);
-  free(lfo_pm_table);
+  free(M68K_RAM);  M68K_RAM = nullptr;
+  free(lfo_pm_table);  lfo_pm_table = nullptr;
 }

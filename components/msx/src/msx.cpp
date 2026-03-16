@@ -481,7 +481,7 @@ void init_msx(const std::string& rom_filename, uint8_t *romdata, size_t rom_data
       "fmsx",
       "-ram", "2",
       "-vram", "2",
-      "-skip", "50",
+      "-skip", "0",
       "-home", BiosFolder,
       "-joy", "1",
       NULL, NULL, NULL,
