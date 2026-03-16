@@ -10,6 +10,38 @@
 static const char *TAG = "custom-bsp";
 
 // ---------------------------------------------------------------------------
+// Custom ILI9341 init sequence — matches Arduino_GFX / Adafruit defaults
+// (the esp_lcd default vendor init uses different power/VCOM values that may
+//  not suit all ILI9341 panels).
+// ---------------------------------------------------------------------------
+static const ili9341_lcd_init_cmd_t ili9341_adafruit_init_cmds[] = {
+    {0xEF, (uint8_t []){0x03, 0x80, 0x02}, 3, 0},
+    {0xCF, (uint8_t []){0x00, 0xC1, 0x30}, 3, 0},
+    {0xED, (uint8_t []){0x64, 0x03, 0x12, 0x81}, 4, 0},
+    {0xE8, (uint8_t []){0x85, 0x00, 0x78}, 3, 0},
+    {0xCB, (uint8_t []){0x39, 0x2C, 0x00, 0x34, 0x02}, 5, 0},
+    {0xF7, (uint8_t []){0x20}, 1, 0},
+    {0xEA, (uint8_t []){0x00, 0x00}, 2, 0},
+    {0xC0, (uint8_t []){0x23}, 1, 0},              // Power control 1, GVDD=4.60V
+    {0xC1, (uint8_t []){0x10}, 1, 0},              // Power control 2
+    {0xC5, (uint8_t []){0x3E, 0x28}, 2, 0},        // VCOM control 1
+    {0xC7, (uint8_t []){0x86}, 1, 0},              // VCOM control 2
+    {0xB1, (uint8_t []){0x00, 0x18}, 2, 0},        // Frame rate control (79Hz)
+    {0xB6, (uint8_t []){0x08, 0x82, 0x27}, 3, 0},  // Display function control
+    {0xF2, (uint8_t []){0x00}, 1, 0},              // 3Gamma function disable
+    {0x26, (uint8_t []){0x01}, 1, 0},              // Gamma curve 1
+    {0xE0, (uint8_t []){0x0F, 0x31, 0x2B, 0x0C, 0x0E, 0x08, 0x4E, 0xF1,
+                        0x37, 0x07, 0x10, 0x03, 0x0E, 0x09, 0x00}, 15, 0},
+    {0xE1, (uint8_t []){0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1,
+                        0x48, 0x08, 0x0F, 0x0C, 0x31, 0x36, 0x0F}, 15, 0},
+};
+
+static const ili9341_vendor_config_t ili9341_vendor_cfg = {
+    .init_cmds = ili9341_adafruit_init_cmds,
+    .init_cmds_size = sizeof(ili9341_adafruit_init_cmds) / sizeof(ili9341_adafruit_init_cmds[0]),
+};
+
+// ---------------------------------------------------------------------------
 // LVGL tick — called every 1 ms by an esp_timer
 // ---------------------------------------------------------------------------
 void CustomBsp::lvgl_tick_cb(void * /*arg*/) {
@@ -93,6 +125,7 @@ bool CustomBsp::initialize_lcd() {
   panel_cfg.rgb_ele_order    = LCD_RGB_ELEMENT_ORDER_BGR;
   panel_cfg.data_endian      = LCD_RGB_DATA_ENDIAN_BIG; // after swap_color_bytes, data arrives big-endian
   panel_cfg.bits_per_pixel   = 16;
+  panel_cfg.vendor_config    = (void *)&ili9341_vendor_cfg;
 
   if (esp_lcd_new_panel_ili9341(io_, &panel_cfg, &panel_) != ESP_OK) {
     ESP_LOGE(TAG, "Failed to create ILI9341 panel");

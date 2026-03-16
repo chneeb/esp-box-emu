@@ -192,6 +192,7 @@ Row batch size: 30 rows per `write_lcd_frame()` call (`num_rows_in_framebuffer`)
 
 ## Display tuning
 
+- **ILI9341 init sequence**: Uses a custom vendor init (`ili9341_adafruit_init_cmds` in `custom-bsp.cpp`) passed via `panel_cfg.vendor_config`. The ESP-IDF default init has VCOM/power values (`0xC5={0x43,0x4C}`, `0xC7=0xA0`) that cause white vertical stripe flickering on this panel. The custom sequence uses Adafruit/Arduino_GFX Type 2 values (`0xC5={0x3E,0x28}`, `0xC7=0x86}`) which are stable. Do NOT remove the `vendor_config` or revert to defaults — the flickering will return.
 - Pixel clock: `pclk_hz` in `custom-bsp.cpp` — currently 20 MHz. Increasing beyond 20 MHz has no effect: breadboard wiring capacitance (~100 pF/node) limits the effective ILI9341 write throughput to ~10 MHz regardless of the requested clock (ILI9341 write cycle spec is 66 ns min ≈ 15 MHz max). At ~10 MHz effective rate a full 320×240 frame takes ~15 ms = 90% of the 16.7 ms display refresh, causing the ~7/8-screen tearing artifact.
 - ILI9341 is initialized in landscape via `esp_lcd_panel_swap_xy(true)` + `mirror(false, false)`.
 - RD pin (GPIO 2) is driven HIGH statically — display is write-only.
@@ -210,27 +211,6 @@ source $IDF_PATH/export.sh   # sets IDF_PATH
 ./patches.sh
 ```
 
-### `components/esp_lcd/i80/esp_lcd_panel_io_i80.c` — GDMA `check_owner = false`
-
-**File**: `lcd_i80_init_dma_link()`, the `gdma_link_list_config_t` initializer (~line 634).
-
-**Change**: `check_owner = true` → `check_owner = false`
-
-**Why**: The i80 driver calls `gdma_link_mount_buffers(bus->dma_link, 0, ...)` from the `trans_done` ISR.
-At that point the DMA is fully idle; no descriptor is in use. However, `auto_write_back` (hardware ownership
-reset after each transfer) fires simultaneously with the `trans_done` interrupt. Due to a race between the
-ISR and the writeback propagating through cache/memory, `gdma_link_mount_buffers` reads stale
-`GDMA_LLI_OWNER_DMA` bits on all nodes and returns `ESP_ERR_INVALID_ARG` (logged as
-`E gdma-link: lli full start=0 need=N avail=0`). The ISR does not check the return value, so
-`lcd_start_transaction` then DMA's the stale descriptor from the previous transfer — corrupting the output.
-With `check_owner=false` the count is always the full pool, eliminating the race. Safe here because the
-i80 trans-done ISR is the only mount site and DMA is always stopped before it runs.
-
-**Symptom if missing**: Constant flicker from the first displayed frame. Every even LVGL frame DMA's the
-stale descriptor (pointing to the previous buffer) instead of the newly rendered buffer, so the display
-alternates between the current and the previous frame at ~30 Hz. Visible as a persistent shimmer on any
-animated content (roller, theme transitions). Confirmed by `E gdma-link: lli full` messages in the serial
-monitor output.
 
 ## Memory
 
