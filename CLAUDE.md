@@ -107,6 +107,18 @@ Enable/disable emulators in the root `CMakeLists.txt` by commenting/uncommenting
 - Emulator detected purely from file extension
 - Boxart panel is 100×165 px; images tile if smaller, clip if larger. Use ImageMagick: `convert input.jpg -resize 100x165! output.jpg`
 
+## Multi-board support (planned refactor)
+
+The codebase currently hardcodes `CustomBsp` in a few places. To support easy board switching:
+
+- **`components/box-emu/include/box-emu.hpp`**: Replace the hardcoded `#include "custom-bsp.hpp"` and `using Bsp = CustomBsp` with a `#if defined(CONFIG_BSP_CUSTOM) / #elif defined(CONFIG_BSP_ESP_BOX)` block.
+- **`components/box-emu/CMakeLists.txt`**: Replace the hardcoded `custom-bsp` dependency with a cmake variable `${BSP_COMPONENT}` selected by the Kconfig choice.
+- **Root `CMakeLists.txt`**: Same — replace `custom-bsp` in the component list with `${BSP_COMPONENT}`.
+- **`main/main.cpp`**: Replace the `has_battery_and_haptics = (version != CARDKB)` runtime check with `constexpr bool` capability flags on the BSP itself (e.g. `Bsp::has_haptics`, `Bsp::has_battery`).
+- **`box-emu/Kconfig`** (new): Add a `choice BSP_TARGET` with options `BSP_CUSTOM` and `BSP_ESP_BOX` so the board is selected via `idf.py menuconfig`.
+
+All other code (`cart.hpp`, `carts.hpp`, emulator components, gui, menu) already uses `BoxEmu::DisplayDriver` and `BoxEmu::Bsp` and would need no changes.
+
 ## BSP interface (`CustomBsp` / `espp::EspBox`)
 
 `box-emu.hpp` uses `using Bsp = CustomBsp`. Any replacement BSP must provide:
